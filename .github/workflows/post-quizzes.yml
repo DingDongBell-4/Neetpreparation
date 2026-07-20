@@ -1,0 +1,108 @@
+name: 📮 Post 30 Random Telegram Quizzes
+
+# Trigger every 2 hours
+on:
+  schedule:
+    - cron: '37 0,3,6,9,12,15,18,19,20,21,22 * * *'  # Every 2 hours
+  
+  # Also trigger when quiz file is updated
+  push:
+    paths:
+      - 'quizzes.docx'
+      - '.github/workflows/post-quizzes.yml'
+  
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Random seed for reproducibility (optional)'
+        required: false
+        default: ''
+
+jobs:
+  post-quizzes:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: 📦 Install dependencies
+        run: |
+          pip install python-telegram-bot httpx python-docx
+      
+      - name: 📄 Check if quiz file exists
+        id: check_file
+        run: |
+          if [ -f "quizzes.docx" ]; then
+            echo "file_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "file_exists=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 🚀 Post 30 random quizzes to Telegram
+        if: steps.check_file.outputs.file_exists == 'true'
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RANDOM_SEED: ${{ github.event.inputs.seed || '' }}
+        run: |
+          python - << 'PYTHON_EOF'
+          import os
+          import sys
+          import asyncio
+          
+          sys.path.insert(0, '.')
+          from telegram_native_scheduler import TelegramNativeScheduler
+          
+          async def main():
+              bot_token = os.getenv('BOT_TOKEN')
+              chat_id = int(os.getenv('CHAT_ID'))
+              seed_str = os.getenv('RANDOM_SEED', '')
+              
+              if not bot_token or not chat_id:
+                  print("❌ Error: BOT_TOKEN or CHAT_ID not set!")
+                  sys.exit(1)
+              
+              # Parse seed
+              random_seed = None
+              if seed_str and seed_str.strip():
+                  try:
+                      random_seed = int(seed_str)
+                  except ValueError:
+                      pass
+              
+              scheduler = TelegramNativeScheduler(bot_token)
+              
+              # Extract quizzes
+              quizzes = await scheduler.extract_quizzes_from_docx('quizzes.docx')
+              
+              if not quizzes:
+                  print("❌ No valid quizzes found!")
+                  sys.exit(1)
+              
+              print(f"📊 Total questions available: {len(quizzes)}")
+              print(f"🎲 Selecting 30 random questions...")
+              
+              # Post 30 random questions with 1-minute delay
+              await scheduler.post_30_questions(
+                  quizzes=quizzes,
+                  chat_ids=[chat_id],
+                  random_seed=random_seed
+              )
+          
+          asyncio.run(main())
+          PYTHON_EOF
+      
+      - name: ✅ Success
+        if: success()
+        run: echo "🎉 30 quizzes posted successfully!"
+      
+      - name: ❌ Failed
+        if: failure()
+        run: echo "⚠️ Failed to post quizzes. Check logs above."
